@@ -1,3 +1,4 @@
+Create a config file config.ini, and set correct path/filename in script.
 # config example:
 ```
 [influxdb]
