@@ -1,5 +1,5 @@
 # config example:
-
+```
 [influxdb]
 dbname =  
 measurement =  
@@ -21,3 +21,4 @@ baudrate = 9600
 bytesize = 8
 stopbits = 1
 timeout = 5
+```
