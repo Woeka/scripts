@@ -2,11 +2,15 @@
 from Queue import Queue
 import serial, sys, re
 import logging
+from logging.config import fileConfig
+
+
 from datetime import datetime
 from time import sleep
 from threading import Thread, Event, currentThread  
 import ssl, httplib  #inlfux
 import minimalmodbus #rs485
+
 import ConfigParser
 
 #read config
@@ -15,9 +19,9 @@ Config.readfp(open('/home/leen/scripts/aardehuis_nl_config.ini'))
 Config.read('/home/leen/scripts/aardehuis_nl_config.ini')
 
 # logging
-logLevel=logging.INFO
-logging.basicConfig(level=logLevel)
-logger = logging.getLogger(__name__)
+fileConfig('/home/leen/scripts/aardehuis_nl_config.ini', )
+logger = logging.getLogger()
+
 
 # init COM port
 ser          = serial.Serial()
@@ -43,6 +47,7 @@ rs485.serial.stopbits = int(Config.get('rs485', 'stopbits'))
 rs485.serial.timeout = int(Config.get('rs485', 'timeout')) 
 
 options = {
+'0-0:96.1.1': 'emeter_id', 
 '1-0:1.8.1': 'emeter_low_in' , 	
 '1-0:1.8.2': 'emeter_high_in' , 	
 '1-0:2.8.1': 'emeter_low_out' , 
@@ -50,8 +55,10 @@ options = {
 '1-0:1.7.0': 'emeter_pow_in', 
 '1-0:2.7.0': 'emeter_pow_out',
 '0-0:1.0.0': 'emeter_time',
-'0-0:96.1.1': 'emeter_id'} 
-
+'1-0:21.7.0': 'emeter_phase_one',
+'1-0:41.7.0': 'emeter_phase_two',
+'1-0:61.7.0': 'emeter_phase_three',
+}
 regex = re.compile(r'[^0-9]*$')  # remove non-digits at the end
 
 def readP1(stop_event, Q):
@@ -59,14 +66,13 @@ def readP1(stop_event, Q):
 	''' read P1, collect values from p1 telegram, return values ''' 
 	#set meterid/id
 
-
-
 	while stop_event.is_set():
 		logger.info("reading P1")
 		tagStack = options.keys()
 		ret = {}
 		while tagStack:
 			raw = ser.readline()
+			logging.debug('raw telegram: {}'.format(raw))
 			tag = raw.split('(')[0]
 
 			if tag in options.keys():
@@ -127,20 +133,32 @@ def updateInflux(values):
 			logging.debug('Ooops! something went wrong with the HTTP connection! {}'.format(e))
 		body = ''
 		for k,v in values.items():
-			if not k is 'emeter_id' and not k is 'emeter_time':
+			if not k is 'emeter_id' and not k is 'emeter_time' and not k.startswith('emeter_phase'):  #exlude phases, time and meterID
 				body += '{ms},id={id},emeter_id={meter_id} {field}={value}\n '.format(ms=measurement, id=huisID, meter_id=meterID, field=k,value=v)
 
 		#if logLevel == 'logging.DEBUG':
 		conn.set_debuglevel(7)
-		try:
-			conn.request('POST', '/write?db={db}&u={user}&p={password}'.format(db=dbname, user=username, password=wachtwoord), body, headers) 
-			response = conn.getresponse()
-			logging.info('Updated Influx. HTTP response {}'.format(response.status))
-		except Exception as e:
-			response = conn.getresponse()
-			logging.debug('Ooops! Something went wrong with POSTing! {}'.format)
-			logging.debug("Reason: {}\n Response:{}".format(response.reason, response.read) )
-			conn.close()
+		conn.request('POST', '/write?db={db}&u={user}&p={password}'.format(db=dbname, user=username, password=wachtwoord), body, headers) 
+		response = conn.getresponse()
+		conn.close()
+
+
+		# TEST DB, measurement == meterID
+
+		body = ''
+		dbname 		= 'db_name'
+		for k,v in values.items():
+			if not k is 'emeter_id' and not k is 'emeter_time' : 
+				body += '{ms},id={id} {field}={value}\n '.format(ms=meterID, id=huisID, field=k,value=v)  # measurement == meterID
+
+		conn.request('POST', '/write?db={db}&u={user}&p={password}'.format(db=dbname, user=username, password=wachtwoord), body, headers)
+		response = conn.getresponse()
+		logging.info('Updated Influx. HTTP response {}'.format(response.status))
+
+		#response = conn.getresponse()
+		#logging.debug('Ooops! Something went wrong with POSTing! {}'.format)
+		#logging.debug("Reason: {}\n Response:{}".format(response.reason, response.read) )
+		conn.close()
 	else:
 		pass
 
