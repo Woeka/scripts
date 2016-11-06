@@ -22,6 +22,12 @@ Config.read('/home/leen/scripts/aardehuis_nl_config.ini')
 fileConfig('/home/leen/scripts/aardehuis_nl_config.ini', )
 logger = logging.getLogger()
 
+#set minimalmodbus logging
+def minimalModbusLogger(message):
+   logger.debug(message)
+
+
+minimalmodbus._print_out = minimalModbusLogger
 
 # init COM port
 ser          = serial.Serial()
@@ -46,6 +52,25 @@ rs485.serial.bytesize = int(Config.get('rs485', 'bytesize'))
 rs485.serial.stopbits = int(Config.get('rs485', 'stopbits'))
 rs485.serial.timeout = int(Config.get('rs485', 'timeout')) 
 
+'''
+	emeter_energy
+		tagKey:
+			eqid	
+			phase [total, L1, L2, L3]
+			tarif [1,2]
+			direction [in, out]
+		values:
+			energy [float/int]
+
+'{ms},id={id}, {field}={value}\n '.format(ms='emeter_energy', id='eqid',phase='', tarif='', direction='' )
+'''
+
+measurementsTags = { 	'emeter_energy': ['phase', 'eqid', 'tarif'],
+				'emeter_pow':['phase', 'eqid', 'tarif'],
+				'solar_energy': ['eqid'],
+				'solar_power': ['eqid'] 
+			}
+
 options = {
 '0-0:96.1.1': 'emeter_id', 
 '1-0:1.8.1': 'emeter_low_in' , 	
@@ -55,9 +80,14 @@ options = {
 '1-0:1.7.0': 'emeter_pow_in', 
 '1-0:2.7.0': 'emeter_pow_out',
 '0-0:1.0.0': 'emeter_time',
-'1-0:21.7.0': 'emeter_phase_one',
-'1-0:41.7.0': 'emeter_phase_two',
-'1-0:61.7.0': 'emeter_phase_three',
+
+'1-0:21.7.0': 'emeter_in_one',
+'1-0:41.7.0': 'emeter_in_two',
+'1-0:61.7.0': 'emeter_in_three',
+'1-0:22.7.0': 'emeter_out_one',
+'1-0:42.7.0': 'emeter_out_two',
+'1-0:62.7.0': 'emeter_out_three',
+'0-0:96.14.0': 'emeter_tarif_indicator',
 }
 regex = re.compile(r'[^0-9]*$')  # remove non-digits at the end
 
@@ -90,8 +120,11 @@ def readP1(stop_event, Q):
 					ret[options[tag]] = value 
 
 				tagStack.remove(tag)
-		logger.debug('P1 return value: {}'.format(ret))
-		Q.put( ret )
+		returnFinal = {}
+		returnFinal = { 'P1' : ret}
+		logger.debug('P1 return value: {}'.format(returnFinal))
+		Q.put( returnFinal )
+		sleep(10)
 
 def readRS485(stop_event, Q):
 	''' read DSM120 powermeter over rs485 '''
@@ -109,12 +142,14 @@ def readRS485(stop_event, Q):
 		else:
 			ret['sol_pow'] = float(Activepower)
 			ret['sol_nrg'] = float(TotalPower)
+		returnFinal = {}
+		returnFinal = { 'solar' : ret}
 		logger.debug('rs485 return value: {}'.format(ret))
-		Q.put( ret ) 
+		Q.put( returnFinal ) 
 		sleep (8)
 
 def updateInflux(values):
-
+	
 	if meterID:
 		dbname 		= Config.get('influxdb', 'dbname')
 		measurement = Config.get('influxdb', 'measurement')
@@ -131,36 +166,129 @@ def updateInflux(values):
 			conn = httplib.HTTPSConnection(host,port,context=context)
 		except Exception as e:
 			logging.debug('Ooops! something went wrong with the HTTP connection! {}'.format(e))
-		body = ''
-		for k,v in values.items():
-			if not k is 'emeter_id' and not k is 'emeter_time' and not k.startswith('emeter_phase'):  #exlude phases, time and meterID
-				body += '{ms},id={id},emeter_id={meter_id} {field}={value}\n '.format(ms=measurement, id=huisID, meter_id=meterID, field=k,value=v)
 
-		#if logLevel == 'logging.DEBUG':
-		conn.set_debuglevel(7)
-		conn.request('POST', '/write?db={db}&u={user}&p={password}'.format(db=dbname, user=username, password=wachtwoord), body, headers) 
-		response = conn.getresponse()
-		conn.close()
+		'''
+		'0-0:96.1.1': 'emeter_id',  	  			eqid
+		'1-0:1.8.1': 'emeter_low_in' , 	  			tariff=1, direction=in, unit = kWh
+		'1-0:1.8.2': 'emeter_high_in' ,   			tariff=2, direction=in, unit = kWh
+		'1-0:2.8.1': 'emeter_low_out' ,  			tariff=1, direction=out, unit = kWh
+		'1-0:2.8.2': 'emeter_high_out', 			tariff=2, direction=out, unit = kWh
+
+		'0-0:1.0.0': 'emeter_time',					meter time
+		'0-0:96.14.0': 'emeter_tariff_indicator',   tariff	
 
 
-		# TEST DB, measurement == meterID
+		'''
+		if 'P1' in values.keys():
+			#meterstanden  cummulitieven in kWh (energy)
+			body  = '{ms},eqid={eqid},tarif={tarif},direction={dir} value={value}\n'.format(ms='emeter_energy', 
+																							eqid=meterID, 
+																							ph='total',
+																							dir='in',
+																							tarif=1,
+																							value=values['P1']['emeter_low_in'] )
+			body += '{ms},eqid={eqid},tarif={tarif},direction={dir} value={value}\n'.format(ms='emeter_energy',
+																							eqid=meterID,
+																							dir='in',
+																							tarif=2,
+																							value=values['P1']['emeter_high_in'] )
+			body += '{ms},eqid={eqid},tarif={tarif},direction={dir} value={value}\n'.format	(ms='emeter_energy',
+																							eqid=meterID,
+																							dir='out',
+																							tarif=1,
+																							value=values['P1']['emeter_low_out'] )
+			body += '{ms},eqid={eqid},tarif={tarif},direction={dir} value={value}\n'.format(ms='emeter_energy',
+																							eqid=meterID,
+																							dir='out',
+																							tarif=2,
+																							value=values['P1']['emeter_high_out'] )
 
-		body = ''
-		dbname 		= 'db_name'
-		for k,v in values.items():
-			if not k is 'emeter_id' and not k is 'emeter_time' : 
-				body += '{ms},id={id} {field}={value}\n '.format(ms=meterID, id=huisID, field=k,value=v)  # measurement == meterID
 
-		conn.request('POST', '/write?db={db}&u={user}&p={password}'.format(db=dbname, user=username, password=wachtwoord), body, headers)
-		response = conn.getresponse()
-		logging.info('Updated Influx. HTTP response {}'.format(response.status))
+			'''
+			'1-0:1.7.0': 'emeter_pow_in', 				tariff= emeter_tariff_indicator, direction=in, phase=total , unit = kW (+P)
+			'1-0:2.7.0': 'emeter_pow_out',				tariff= emeter_tariff_indicator, direction=out, phase=total , unit = kW
 
-		#response = conn.getresponse()
-		#logging.debug('Ooops! Something went wrong with POSTing! {}'.format)
-		#logging.debug("Reason: {}\n Response:{}".format(response.reason, response.read) )
-		conn.close()
+			'1-0:21.7.0': 'emeter_in_one',				tariff= emeter_tariff_indicator, direction=in, phase=one, unit = kW
+			'1-0:41.7.0': 'emeter_in_two',				tariff= emeter_tariff_indicator, direction=in, phase=two, unit = kW
+			'1-0:61.7.0': 'emeter_in_three',			tariff= emeter_tariff_indicator, direction=in, phase=three , unit = kW
+			'1-0:22.7.0': 'emeter_out_one',				tariff= emeter_tariff_indicator, direction=out, phase=one, unit = kW
+			'1-0:42.7.0': 'emeter_out_two',				tariff= emeter_tariff_indicator, direction=out, phase=two, unit = kW
+			'1-0:62.7.0': 'emeter_out_three',			tariff= emeter_tariff_indicator, direction=out, phase=three, unit = kW
+
+			'''
+			# meterstanden instant in kW (power)
+			body += '{ms},eqid={eqid},phase={ph},tarif={tarif},direction={dir} value={value}\n'.format(	ms='emeter_power',
+																										eqid=meterID,
+																										ph='total',
+																										dir='in',
+																										tarif=int(values['P1']['emeter_tarif_indicator']),
+																										value=values['P1']['emeter_pow_in'] )			
+			body += '{ms},eqid={eqid},phase={ph},tarif={tarif},direction={dir} value={value}\n'.format(	ms='emeter_power',
+																										eqid=meterID,
+																										ph='total',
+																										dir='out',
+																										tarif=int(values['P1']['emeter_tarif_indicator']),
+																										value=values['P1']['emeter_pow_out'] )
+
+
+			body += '{ms},eqid={eqid},phase={ph},tarif={tarif},direction={dir} value={value}\n'.format(	ms='emeter_power',
+																										eqid=meterID,
+																										ph='L1',
+																										dir='in',
+																										tarif=int(values['P1']['emeter_tarif_indicator']),
+																										value=values['P1']['emeter_in_one'] )
+			body += '{ms},eqid={eqid},phase={ph},tarif={tarif},direction={dir} value={value}\n'.format(	ms='emeter_power',
+																										eqid=meterID,
+																										ph='L2',
+																										dir='in',
+																										tarif=int(values['P1']['emeter_tarif_indicator']),
+																										value=values['P1']['emeter_in_two'] )
+			body += '{ms},eqid={eqid},phase={ph},tarif={tarif},direction={dir} value={value}\n'.format(	ms='emeter_power',
+																										eqid=meterID,
+																										ph='L3',
+																										dir='in',
+																										tarif=int(values['P1']['emeter_tarif_indicator']),
+																										value=values['P1']['emeter_in_three'] )
+
+			body += '{ms},eqid={eqid},phase={ph},tarif={tarif},direction={dir} value={value}\n'.format(	ms='emeter_power',
+																										eqid=meterID,
+																										ph='L1',
+																										dir='out',
+																										tarif=int(values['P1']['emeter_tarif_indicator']),
+																										value=values['P1']['emeter_out_one'] )
+			body += '{ms},eqid={eqid},phase={ph},tarif={tarif},direction={dir} value={value}\n'.format(	ms='emeter_power',
+																										eqid=meterID,
+																										ph='L2',
+																										dir='out',
+																										tarif=int(values['P1']['emeter_tarif_indicator']),
+																										value=values['P1']['emeter_out_two'] )
+			body += '{ms},eqid={eqid},phase={ph},tarif={tarif},direction={dir} value={value}\n'.format(ms='emeter_power',
+																										eqid=meterID,
+																										ph='L3',
+																										dir='out',
+																										tarif=int(values['P1']['emeter_tarif_indicator']),
+																										value=values['P1']['emeter_out_three'] )
+			print body
+			#if logLevel == 'logging.DEBUG':
+			conn.set_debuglevel(7)
+			try:
+				dbname='db_name'
+				conn.request('POST', '/write?db={db}&u={user}&p={password}'.format(db=dbname, user=username, password=wachtwoord), body, headers) 
+			except Exception as e:
+				log.debug('Ooops! something went wronh with POSTing {}'.format(e))
+				pass
+			finally:
+				response = conn.getresponse()
+				logging.info('Updated Influx. HTTP response {}'.format(response.status))
+				conn.close()
+
+
+				#logging.debug("Reason: {}\n Response:{}".format(response.reason, response.read) )
+			conn.close()
+		else:
+			pass  # pass if something other then P1
 	else:
-		pass
+		pass # pass if meterId not set
 
 		
 def ConfigSectionMap(section):
