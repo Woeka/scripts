@@ -52,3 +52,35 @@ args=('debug.log', maxBytes=200000, backupCount=5)
 [formatter_formatter]
 format=%(asctime)s %(name)-12s %(levelname)-8s %(message)s
 ```
+
+
+
+
+# Influxdb schema
+```
+	emeter_energy
+		tagKey:
+			eqid	
+			phase [total, L1, L2, L3]
+			tarif [1,2]
+			direction [in, out]
+		values:
+			energy [float/int]
+
+	emeter_power
+		tagKey:
+			eqid	
+			phase [total, L1, L2, L3]
+			tarif [1,2]
+			direction [in, out]			
+		values:
+			power [float/int]			
+
+	esp_events
+		tagKey:
+			eqid
+			event	
+			ssid	
+		values:
+			count [1, none]
+```
