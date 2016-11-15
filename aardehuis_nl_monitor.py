@@ -124,7 +124,6 @@ def readP1(stop_event, Q):
 		returnFinal = { 'P1' : ret}
 		logger.debug('P1 return value: {}'.format(returnFinal))
 		Q.put( returnFinal )
-		sleep(10)
 
 def readRS485(stop_event, Q):
 	''' read DSM120 powermeter over rs485 '''
@@ -135,7 +134,6 @@ def readRS485(stop_event, Q):
 			Activepower =  rs485.read_float( 12, functioncode=4, numberOfRegisters=2)
 			sleep(1)
 			TotalPower =  rs485.read_float( 342, functioncode=4, numberOfRegisters=2)
-			sleep(1)
 		except IOError as err:
 			logging.debug( 'Ooops, rs458 hickups %s' % err)
 			pass
@@ -146,7 +144,6 @@ def readRS485(stop_event, Q):
 		returnFinal = { 'solar' : ret}
 		logger.debug('rs485 return value: {}'.format(ret))
 		Q.put( returnFinal ) 
-		sleep (8)
 
 def updateInflux(values):
 	
@@ -181,6 +178,7 @@ def updateInflux(values):
 		'''
 		if 'P1' in values.keys():
 			#meterstanden  cummulitieven in kWh (energy)
+
 			body  = '{ms},eqid={eqid},tarif={tarif},direction={dir} value={value}\n'.format(ms='emeter_energy', 
 																							eqid=meterID, 
 																							ph='total',
@@ -275,11 +273,12 @@ def updateInflux(values):
 				dbname='db_name'
 				conn.request('POST', '/write?db={db}&u={user}&p={password}'.format(db=dbname, user=username, password=wachtwoord), body, headers) 
 			except Exception as e:
-				log.debug('Ooops! something went wronh with POSTing {}'.format(e))
+				logging.info('Ooops! something went wronh with POSTing {}'.format(e))
 				pass
-			finally:
+			else:
 				response = conn.getresponse()
 				logging.info('Updated Influx. HTTP response {}'.format(response.status))
+			finally:
 				conn.close()
 
 
@@ -317,8 +316,6 @@ def processQ ( stop_event, Q ) :
 	''' processes content of the Q, updates influx '''
 	logging.info( 'Starting %s' % currentThread().getName())
 	while stop_event.is_set() and Q:
-
-		logging.info( 'Starting %s' % currentThread().getName())
 		vals = Q.get()
 		logging.debug("get Q: {}".format(vals))
 
