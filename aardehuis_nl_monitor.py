@@ -46,7 +46,7 @@ Q = Queue()
 rs485 = minimalmodbus.Instrument( Config.get('rs485', 'Instrument'), 1)
 rs485.mode =  minimalmodbus.MODE_RTU
 rs485.serial.parity =  minimalmodbus.serial.PARITY_NONE
-rs485.debug = Config.get('rs485', 'debug')
+#rs485.debug = Config.get('rs485', 'debug')
 rs485.serial.baudrate = int(Config.get('rs485', 'baudrate'))
 rs485.serial.bytesize = int(Config.get('rs485', 'bytesize'))
 rs485.serial.stopbits = int(Config.get('rs485', 'stopbits'))
@@ -144,25 +144,46 @@ def readRS485(stop_event, Q):
 		returnFinal = { 'solar' : ret}
 		logger.debug('rs485 return value: {}'.format(ret))
 		Q.put( returnFinal ) 
+		sleep(9)
+
+def httpPost(body):
+	host 		= Config.get('influxdb', 'influxHost')
+	port 		= Config.get('influxdb', 'port')
+	wachtwoord 	= Config.get('influxdb', 'wachtwoord')
+	username	= Config.get('influxdb', 'username')
+	dbname 		= Config.get('influxdb', 'dbname')
+	context = ssl._create_unverified_context()
+	conn = httplib.HTTPSConnection(host,port,context=context)
+	headers = {'Content-type': 'application/x-www-form-urlencoded','Accept': 'text/plain'}
+
+	#except Exception as e:
+	#	logging.info('Ooops! something went wrong with creating HTTP object! {}'.format(e))
+
+	conn.set_debuglevel(7)
+	try:
+		dbname='db_name'
+		conn.request('POST', '/write?db={db}&u={user}&p={password}'.format(db=dbname, user=username, password=wachtwoord), body, headers) 
+	except Exception as e:
+		logging.info('Ooops! something went wronh with POSTing {}'.format(e))
+		pass
+	else:
+		response = conn.getresponse()
+		logging.info('Updated Influx. HTTP response {}'.format(response.status))
+	finally:
+		conn.close()
+
+
+		#logging.debug("Reason: {}\n Response:{}".format(response.reason, response.read) )
+	conn.close()
 
 def updateInflux(values):
 	
 	if meterID:
-		dbname 		= Config.get('influxdb', 'dbname')
 		measurement = Config.get('influxdb', 'measurement')
-		host 		= Config.get('influxdb', 'influxHost')
-		port 		= Config.get('influxdb', 'port')
 		huisID		= Config.get('influxdb', 'huisID' )
-		wachtwoord 	= Config.get('influxdb', 'wachtwoord')
-		username	= Config.get('influxdb', 'username')
 
 
-		context = ssl._create_unverified_context()
-		headers = {'Content-type': 'application/x-www-form-urlencoded','Accept': 'text/plain'}
-		try:
-			conn = httplib.HTTPSConnection(host,port,context=context)
-		except Exception as e:
-			logging.debug('Ooops! something went wrong with the HTTP connection! {}'.format(e))
+
 
 		'''
 		'0-0:96.1.1': 'emeter_id',  	  			eqid
@@ -178,28 +199,23 @@ def updateInflux(values):
 		'''
 		if 'P1' in values.keys():
 			#meterstanden  cummulitieven in kWh (energy)
-
-			body  = '{ms},eqid={eqid},tarif={tarif},direction={dir} value={value}\n'.format(ms='emeter_energy', 
-																							eqid=meterID, 
-																							ph='total',
-																							dir='in',
-																							tarif=1,
-																							value=values['P1']['emeter_low_in'] )
-			body += '{ms},eqid={eqid},tarif={tarif},direction={dir} value={value}\n'.format(ms='emeter_energy',
-																							eqid=meterID,
-																							dir='in',
-																							tarif=2,
-																							value=values['P1']['emeter_high_in'] )
-			body += '{ms},eqid={eqid},tarif={tarif},direction={dir} value={value}\n'.format	(ms='emeter_energy',
-																							eqid=meterID,
-																							dir='out',
-																							tarif=1,
-																							value=values['P1']['emeter_low_out'] )
-			body += '{ms},eqid={eqid},tarif={tarif},direction={dir} value={value}\n'.format(ms='emeter_energy',
-																							eqid=meterID,
-																							dir='out',
-																							tarif=2,
-																							value=values['P1']['emeter_high_out'] )
+			bodyTemplate_energy = 'emeter_energy,eqid={eqid},tarif={tarif},direction={dir} value={value}\n'
+			body  = bodyTemplate_energy.format( eqid=meterID, 
+												dir='in',
+												tarif=1,
+												value=values['P1']['emeter_low_in'] )
+			body += bodyTemplate_energy.format( eqid=meterID,
+												dir='in',
+												tarif=2,
+												value=values['P1']['emeter_high_in'] )
+			body += bodyTemplate_energy.format( eqid=meterID,
+												dir='out',
+												tarif=1,
+												value=values['P1']['emeter_low_out'] )
+			body += bodyTemplate_energy.format( eqid=meterID,
+												dir='out',
+												tarif=2,
+												value=values['P1']['emeter_high_out'] )
 
 
 			'''
@@ -215,75 +231,61 @@ def updateInflux(values):
 
 			'''
 			# meterstanden instant in kW (power)
-			body += '{ms},eqid={eqid},phase={ph},tarif={tarif},direction={dir} value={value}\n'.format(	ms='emeter_power',
-																										eqid=meterID,
-																										ph='total',
-																										dir='in',
-																										tarif=int(values['P1']['emeter_tarif_indicator']),
-																										value=values['P1']['emeter_pow_in'] )			
-			body += '{ms},eqid={eqid},phase={ph},tarif={tarif},direction={dir} value={value}\n'.format(	ms='emeter_power',
-																										eqid=meterID,
-																										ph='total',
-																										dir='out',
-																										tarif=int(values['P1']['emeter_tarif_indicator']),
-																										value=values['P1']['emeter_pow_out'] )
+			bodyTemplate_power = 'emeter_power,eqid={eqid},tarif={tarif},direction={dir},phase={ph} value={value}\n'
+			body += bodyTemplate_power.format(	eqid=meterID,
+												ph='total',
+												dir='in',
+												tarif=int(values['P1']['emeter_tarif_indicator']),
+												value=values['P1']['emeter_pow_in'] )			
+			body += bodyTemplate_power.format(	eqid=meterID,
+												ph='total',
+												dir='out',
+												tarif=int(values['P1']['emeter_tarif_indicator']),
+												value=values['P1']['emeter_pow_out'] )
+			body += bodyTemplate_power.format(	eqid=meterID,
+												ph='L1',
+												dir='in',
+													tarif=int(values['P1']['emeter_tarif_indicator']),
+												value=values['P1']['emeter_in_one'] )
+			body += bodyTemplate_power.format(	eqid=meterID,
+												ph='L2',
+												dir='in',
+												tarif=int(values['P1']['emeter_tarif_indicator']),
+												value=values['P1']['emeter_in_two'] )
+			body += bodyTemplate_power.format(	eqid=meterID,
+												ph='L3',
+												dir='in',
+												tarif=int(values['P1']['emeter_tarif_indicator']),
+												value=values['P1']['emeter_in_three'] )
 
+			body += bodyTemplate_power.format(	eqid=meterID,
+												ph='L1',
+												dir='out',
+												tarif=int(values['P1']['emeter_tarif_indicator']),
+												value=values['P1']['emeter_out_one'] )
+			body += bodyTemplate_power.format(	eqid=meterID,
+												ph='L2',
+												dir='out',
+												tarif=int(values['P1']['emeter_tarif_indicator']),
+												value=values['P1']['emeter_out_two'] )
+			body += bodyTemplate_power.format(	eqid=meterID,
+												ph='L3',
+												dir='out',
+												tarif=int(values['P1']['emeter_tarif_indicator']),
+												value=values['P1']['emeter_out_three'] )
+			logging.debug('post body: \n{}'.format(body))
+			httpPost(body)
 
-			body += '{ms},eqid={eqid},phase={ph},tarif={tarif},direction={dir} value={value}\n'.format(	ms='emeter_power',
-																										eqid=meterID,
-																										ph='L1',
-																										dir='in',
-																										tarif=int(values['P1']['emeter_tarif_indicator']),
-																										value=values['P1']['emeter_in_one'] )
-			body += '{ms},eqid={eqid},phase={ph},tarif={tarif},direction={dir} value={value}\n'.format(	ms='emeter_power',
-																										eqid=meterID,
-																										ph='L2',
-																										dir='in',
-																										tarif=int(values['P1']['emeter_tarif_indicator']),
-																										value=values['P1']['emeter_in_two'] )
-			body += '{ms},eqid={eqid},phase={ph},tarif={tarif},direction={dir} value={value}\n'.format(	ms='emeter_power',
-																										eqid=meterID,
-																										ph='L3',
-																										dir='in',
-																										tarif=int(values['P1']['emeter_tarif_indicator']),
-																										value=values['P1']['emeter_in_three'] )
+		elif 'solar' in values.keys() and len(values['solar']) == 2:
+		# solar power / energy, pass if not both there
+			bodyTemplate_solar = 'emeter_solar,eqid={eqid},type={type} value={value}\n'
 
-			body += '{ms},eqid={eqid},phase={ph},tarif={tarif},direction={dir} value={value}\n'.format(	ms='emeter_power',
-																										eqid=meterID,
-																										ph='L1',
-																										dir='out',
-																										tarif=int(values['P1']['emeter_tarif_indicator']),
-																										value=values['P1']['emeter_out_one'] )
-			body += '{ms},eqid={eqid},phase={ph},tarif={tarif},direction={dir} value={value}\n'.format(	ms='emeter_power',
-																										eqid=meterID,
-																										ph='L2',
-																										dir='out',
-																										tarif=int(values['P1']['emeter_tarif_indicator']),
-																										value=values['P1']['emeter_out_two'] )
-			body += '{ms},eqid={eqid},phase={ph},tarif={tarif},direction={dir} value={value}\n'.format(ms='emeter_power',
-																										eqid=meterID,
-																										ph='L3',
-																										dir='out',
-																										tarif=int(values['P1']['emeter_tarif_indicator']),
-																										value=values['P1']['emeter_out_three'] )
-			print body
-			#if logLevel == 'logging.DEBUG':
-			conn.set_debuglevel(7)
-			try:
-				dbname='db_name'
-				conn.request('POST', '/write?db={db}&u={user}&p={password}'.format(db=dbname, user=username, password=wachtwoord), body, headers) 
-			except Exception as e:
-				logging.info('Ooops! something went wronh with POSTing {}'.format(e))
-				pass
-			else:
-				response = conn.getresponse()
-				logging.info('Updated Influx. HTTP response {}'.format(response.status))
-			finally:
-				conn.close()
+			body  = bodyTemplate_solar.format(eqid=meterID,type='cumulative', value=values['solar']['sol_nrg'])
+			body += bodyTemplate_solar.format(eqid=meterID,type='instant', value=values['solar']['sol_pow'])
 
+			logging.debug('post body: \n{}'.format(body))
+			httpPost(body)
 
-				#logging.debug("Reason: {}\n Response:{}".format(response.reason, response.read) )
-			conn.close()
 		else:
 			pass  # pass if something other then P1
 	else:
@@ -299,7 +301,7 @@ def ConfigSectionMap(section):
 			if dict1[option] == -1:
 				DebugPrint("skip: %s" % option)
 		except:
-			print("exception on %s!" % option)
+			logging.info("Config: exception on %s!" % option)
 			dict1[option] = None
 	return dict1
 
