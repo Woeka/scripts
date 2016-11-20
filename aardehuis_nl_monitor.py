@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-from Queue import Queue
 import serial, sys, re
 import logging
 from logging.config import fileConfig
@@ -7,8 +6,9 @@ from logging.config import fileConfig
 
 from datetime import datetime
 from time import sleep
+from httplib import HTTPSConnection
 from threading import Thread, Event, currentThread  
-import ssl, httplib  #inlfux
+import ssl  #inlfux
 import minimalmodbus #rs485
 
 import ConfigParser
@@ -38,8 +38,6 @@ ser.open()
 
 global meterID
 meterID = None
-# init Queue
-Q = Queue()
 
 
 #init rs485 
@@ -62,31 +60,44 @@ rs485.serial.timeout = int(Config.get('rs485', 'timeout'))
 		values:
 			energy [float/int]
 
-'{ms},id={id}, {field}={value}\n '.format(ms='emeter_energy', id='eqid',phase='', tarif='', direction='' )
-'''
+bodyTemplate_power = 'emeter_power,eqid={eqid},tarif={tarif},direction={dir},phase={ph} value={value}\n'
 
+body += bodyTemplate_power.format(	eqid=meterID,
+									tarif=int(values['P1']['emeter_tarif_indicator']),
+									dir=direction,
+									ph=phase,
+									value=values['P1'][i] )		
+energy:
+direction tarif
+
+power:
+direction phase
+
+
+'''
 
 options = {
 '0-0:96.1.1': 'emeter_id', 
-'1-0:1.8.1': 'emeter_low_in' , 	
-'1-0:1.8.2': 'emeter_high_in' , 	
-'1-0:2.8.1': 'emeter_low_out' , 
-'1-0:2.8.2': 'emeter_high_out', 
-'1-0:1.7.0': 'emeter_pow_in', 
-'1-0:2.7.0': 'emeter_pow_out',
 '0-0:1.0.0': 'emeter_time',
-
-'1-0:21.7.0': 'emeter_in_one',
-'1-0:41.7.0': 'emeter_in_two',                                   
-'1-0:61.7.0': 'emeter_in_three',
-'1-0:22.7.0': 'emeter_out_one',
-'1-0:42.7.0': 'emeter_out_two',
-'1-0:62.7.0': 'emeter_out_three',
 '0-0:96.14.0': 'emeter_tarif_indicator',
+
+'1-0:1.8.1': 'energy_in_1' , 	
+'1-0:1.8.2': 'energy_in_2' , 	
+'1-0:2.8.1': 'energy_out_1' , 
+'1-0:2.8.2': 'energy_out_2', 
+
+'1-0:1.7.0': 'power_in_total', 
+'1-0:2.7.0': 'power_out_total',
+'1-0:21.7.0': 'power_in_L1',
+'1-0:41.7.0': 'power_in_L2',                                   
+'1-0:61.7.0': 'power_in_L3',
+'1-0:22.7.0': 'power_out_L1',
+'1-0:42.7.0': 'power_out_L2',
+'1-0:62.7.0': 'power_out_L3',
 }
 regex = re.compile(r'[^0-9]*$')  # remove non-digits at the end
 
-def readP1(stop_event, Q):
+def readP1(stop_event ):
 	logging.info( 'Starting %s' % currentThread().getName())
 	''' read P1, collect values from p1 telegram, return values ''' 
 	#set meterid/id
@@ -115,12 +126,60 @@ def readP1(stop_event, Q):
 					ret[options[tag]] = value 
 
 				tagStack.remove(tag)
-		returnFinal = {}
-		returnFinal = { 'P1' : ret}
-		logger.debug('P1 return value: {}'.format(returnFinal))
-		Q.put( returnFinal )
+		logger.debug('P1 return value: {}'.format(ret))
+		postP1( ret, stop_event )
 
-def readRS485(stop_event, Q):
+def postP1(values, stop_event):
+	'''
+	'0-0:96.1.1': 'emeter_id',  	  			eqid
+	'1-0:1.8.1': 'energy_in_1' , 	  			tariff=1, direction=in, unit = kWh
+	'1-0:1.8.2': 'energy_in_2' ,   			tariff=2, direction=in, unit = kWh
+	'1-0:2.8.1': 'energy_out_1' ,  			tariff=1, direction=out, unit = kWh
+	'1-0:2.8.2': 'energy_out_2', 			tariff=2, direction=out, unit = kWh
+
+	'0-0:1.0.0': 'emeter_time',					meter time
+	'0-0:96.14.0': 'emeter_tariff_indicator',   tariff	
+
+	'1-0:1.7.0': 'power_in_total', 				tariff= emeter_tariff_indicator, direction=in, phase=total , unit = kW (+P)
+	'1-0:2.7.0': 'power_out_total',				tariff= emeter_tariff_indicator, direction=out, phase=total , unit = kW
+
+	'1-0:21.7.0': 'power_in_L1',				tariff= emeter_tariff_indicator, direction=in, phase=one, unit = kW
+	'1-0:41.7.0': 'power_in_L2',				tariff= emeter_tariff_indicator, direction=in, phase=two, unit = kW
+	'1-0:61.7.0': 'power_in_L3',			tariff= emeter_tariff_indicator, direction=in, phase=three , unit = kW
+	'1-0:22.7.0': 'power_out_L1',				tariff= emeter_tariff_indicator, direction=out, phase=one, unit = kW
+	'1-0:42.7.0': 'power_out_L2',				tariff= emeter_tariff_indicator, direction=out, phase=two, unit = kW
+	'1-0:62.7.0': 'power_out_L3',			tariff= emeter_tariff_indicator, direction=out, phase=three, unit = kW
+
+	'''
+
+	if meterID and stop_event.is_set():
+			tarif = int(values['emeter_tarif_indicator'])
+
+			body=''
+			bodyTemplate_energy = 'emeter_energy,eqid={eqid},tarif={tarif},direction={dir} value={value} \n'
+			bodyTemplate_power = 'emeter_power,eqid={eqid},tarif={tarif},direction={dir},phase={phase} value={value}\n'
+
+			for k,v in options.items():
+				splitted = v.split('_')
+				if splitted[0] == 'power':
+					# meterstanden acuteel in kW )(power)
+					body += bodyTemplate_power.format(	eqid=meterID,
+														tarif=tarif,
+														dir=splitted[1],
+														phase=splitted[2],
+														value=values[v] )
+				elif splitted[0] == 'energy':
+					#meterstanden  cummulitieven in kWh (energy)
+					body += bodyTemplate_energy.format(eqid=meterID, 
+															dir=splitted[1],
+															tarif=splitted[2],
+															value=values[v] )
+			logging.debug('post body: \n{}'.format(body))
+			httpPost(body)
+			sleep(10)
+
+
+def readRS485(stop_event ):
 	''' read DSM120 powermeter over rs485 '''
 	logging.info( 'Starting %s' % currentThread().getName())
 	while stop_event.is_set():
@@ -135,11 +194,20 @@ def readRS485(stop_event, Q):
 		else:
 			ret['sol_pow'] = float(Activepower)
 			ret['sol_nrg'] = float(TotalPower)
-		returnFinal = {}
-		returnFinal = { 'solar' : ret}
-		logger.debug('rs485 return value: {}'.format(ret))
-		Q.put( returnFinal ) 
+			logger.debug('rs485 return value: {}'.format(ret))
+			postRS485( ret, stop_event ) 
 		sleep(9)
+
+def postRS485(values, stop_event):
+	if stop_event.is_set() and len(values) == 2:
+		# solar power / energy, pass if not both there
+		bodyTemplate_solar = 'emeter_solar,eqid={eqid},type={type} value={value}\n'
+
+		body  = bodyTemplate_solar.format(eqid=meterID,type='cumulative', value=values['sol_nrg'])
+		body += bodyTemplate_solar.format(eqid=meterID,type='instant', value=values['sol_pow'])
+
+		logging.debug('post body: \n{}'.format(body))
+		httpPost(body)
 
 def httpPost(body):
 	host 		= Config.get('influxdb', 'influxHost')
@@ -148,7 +216,7 @@ def httpPost(body):
 	username	= Config.get('influxdb', 'username')
 	dbname 		= Config.get('influxdb', 'dbname')
 	context = ssl._create_unverified_context()
-	conn = httplib.HTTPSConnection(host,port,context=context)
+	conn = HTTPSConnection(host,port,context=context)
 	headers = {'Content-type': 'application/x-www-form-urlencoded','Accept': 'text/plain'}
 
 	#except Exception as e:
@@ -171,107 +239,7 @@ def httpPost(body):
 		#logging.debug("Reason: {}\n Response:{}".format(response.reason, response.read) )
 	conn.close()
 
-def updateInflux(values):
-	
-	if meterID:
-		measurement = Config.get('influxdb', 'measurement')
-		huisID		= Config.get('influxdb', 'huisID' )
 
-
-
-
-		'''
-		'0-0:96.1.1': 'emeter_id',  	  			eqid
-		'1-0:1.8.1': 'emeter_low_in' , 	  			tariff=1, direction=in, unit = kWh
-		'1-0:1.8.2': 'emeter_high_in' ,   			tariff=2, direction=in, unit = kWh
-		'1-0:2.8.1': 'emeter_low_out' ,  			tariff=1, direction=out, unit = kWh
-		'1-0:2.8.2': 'emeter_high_out', 			tariff=2, direction=out, unit = kWh
-
-		'0-0:1.0.0': 'emeter_time',					meter time
-		'0-0:96.14.0': 'emeter_tariff_indicator',   tariff	
-
-
-		'''
-		if 'P1' in values.keys():
-
-			#meterstanden  cummulitieven in kWh (energy)
-			body=''
-			bodyTemplate_energy = 'emeter_energy,eqid={eqid},tarif={tarif},direction={dir} value={value}\n'
-			
-			for i in [ 'emeter_low_in', 'emeter_high_in', 'emeter_low_out', 'emeter_high_out']:
-				splitted = i.split('_')
-				if 'in' in splitted:
-					direction='in'
-				elif 'out' in splitted:
-					direction='out'
-
-				if 'low' in splitted:
-					tarif = 1
-				elif 'high' in splitted:
-					tarif = 2
-
-				body += bodyTemplate_energy.format(eqid=meterID, 
-													dir=direction,
-													tarif=tarif,
-													value=values['P1'][i] )
-			'''
-			'1-0:1.7.0': 'emeter_pow_in', 				tariff= emeter_tariff_indicator, direction=in, phase=total , unit = kW (+P)
-			'1-0:2.7.0': 'emeter_pow_out',				tariff= emeter_tariff_indicator, direction=out, phase=total , unit = kW
-
-			'1-0:21.7.0': 'emeter_in_one',				tariff= emeter_tariff_indicator, direction=in, phase=one, unit = kW
-			'1-0:41.7.0': 'emeter_in_two',				tariff= emeter_tariff_indicator, direction=in, phase=two, unit = kW
-			'1-0:61.7.0': 'emeter_in_three',			tariff= emeter_tariff_indicator, direction=in, phase=three , unit = kW
-			'1-0:22.7.0': 'emeter_out_one',				tariff= emeter_tariff_indicator, direction=out, phase=one, unit = kW
-			'1-0:42.7.0': 'emeter_out_two',				tariff= emeter_tariff_indicator, direction=out, phase=two, unit = kW
-			'1-0:62.7.0': 'emeter_out_three',			tariff= emeter_tariff_indicator, direction=out, phase=three, unit = kW
-
-			'''
-			# meterstanden instant in kW (power)
-			bodyTemplate_power = 'emeter_power,eqid={eqid},tarif={tarif},direction={dir},phase={ph} value={value}\n'
-
-			for i in [ 'emeter_pow_in', 'emeter_pow_out', 'emeter_in_one', 'emeter_in_two', 'emeter_in_three', 'emeter_out_one', 'emeter_out_two', 'emeter_out_three' ]:
-				splitted = i.split('_')
-
-				if 'in' in splitted:
-					direction='in'
-				elif 'out' in splitted:
-					direction='out' 
-
-				if 'pow' in splitted:
-					phase = 'total'
-				elif 'one' in splitted:
-					phase = 'L1'
-				elif 'two' in splitted:
-					phase = 'L2'
-				elif 'three' in splitted:
-					phase = 'L3'
-
-				body += bodyTemplate_power.format(	eqid=meterID,
-													ph=phase,
-													dir=direction,
-													tarif=int(values['P1']['emeter_tarif_indicator']),
-													value=values['P1'][i] )			
-
-
-
-			logging.debug('post body: \n{}'.format(body))
-			httpPost(body)
-
-		elif 'solar' in values.keys() and len(values['solar']) == 2:
-		# solar power / energy, pass if not both there
-			bodyTemplate_solar = 'emeter_solar,eqid={eqid},type={type} value={value}\n'
-
-			body  = bodyTemplate_solar.format(eqid=meterID,type='cumulative', value=values['solar']['sol_nrg'])
-			body += bodyTemplate_solar.format(eqid=meterID,type='instant', value=values['solar']['sol_pow'])
-
-			logging.debug('post body: \n{}'.format(body))
-			httpPost(body)
-
-		else:
-			logging.info("Ooops! missed soler value ")
-			pass  # pass if something other then P1
-	else:
-		pass # pass if meterId not set
 
 		
 def ConfigSectionMap(section):
@@ -296,18 +264,6 @@ def tijdomvormer(timestamp):
 	seconds	= timestamp[10:12] 
 	return datetime(*map(int,( year, month, day, hour, minutes, seconds ) )).strftime('%s')  # epoch				
 
-def processQ ( stop_event, Q ) :
-	''' processes content of the Q, updates influx '''
-	logging.info( 'Starting %s' % currentThread().getName())
-	while stop_event.is_set() and Q:
-		vals = Q.get()
-		logging.debug("get Q: {}".format(vals))
-
-
-		updateInflux(vals)
-		Q.task_done()
-
-
 
 def main():
 	logger.info("Starting main thread")
@@ -315,24 +271,20 @@ def main():
 
 	pill2kill = Event()
 	pill2kill.set()
-	readerWorker = Thread(name='readerWorker', target=readP1, args=(pill2kill, Q,))
-	processQWorker = Thread(name='processQWorker', target=processQ, args=(pill2kill, Q,))
-	rs485reader = Thread(name='rs485reader', target=readRS485, args=(pill2kill, Q,))
-	#readerWorker.setDaemon = True
-	readerWorker.start()
+	P1reader = Thread(name='P1reader', target=readP1, args=(pill2kill, ))
+	rs485reader = Thread(name='rs485reader', target=readRS485, args=(pill2kill, ))
+	#P1reader.setDaemon = True
+	P1reader.start()
 
-	#processQWorker.setDaemon = True
-	processQWorker.start()
 	rs485reader.start()
 	#GPIO.add_event_detect(24, GPIO.RISING, callback=waterMeter, bouncetime=1000)  # water meter
 	try:
 		while 1:
 			sleep (10)
 	except KeyboardInterrupt:
-		print "attempting to close threads. "
+		print '\n attempting to close threads.\n {filler}\n'.format( filler = 60*'=' )
 		pill2kill.clear()
-		processQWorker.join()
-		readerWorker.join()
+		P1reader.join()
 		sys.exit()
 	
 if __name__ == '__main__': 
