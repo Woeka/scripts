@@ -65,11 +65,6 @@ rs485.serial.timeout = int(Config.get('rs485', 'timeout'))
 '{ms},id={id}, {field}={value}\n '.format(ms='emeter_energy', id='eqid',phase='', tarif='', direction='' )
 '''
 
-measurementsTags = { 	'emeter_energy': ['phase', 'eqid', 'tarif'],
-				'emeter_pow':['phase', 'eqid', 'tarif'],
-				'solar_energy': ['eqid'],
-				'solar_power': ['eqid'] 
-			}
 
 options = {
 '0-0:96.1.1': 'emeter_id', 
@@ -82,7 +77,7 @@ options = {
 '0-0:1.0.0': 'emeter_time',
 
 '1-0:21.7.0': 'emeter_in_one',
-'1-0:41.7.0': 'emeter_in_two',
+'1-0:41.7.0': 'emeter_in_two',                                   
 '1-0:61.7.0': 'emeter_in_three',
 '1-0:22.7.0': 'emeter_out_one',
 '1-0:42.7.0': 'emeter_out_two',
@@ -198,26 +193,27 @@ def updateInflux(values):
 
 		'''
 		if 'P1' in values.keys():
+
 			#meterstanden  cummulitieven in kWh (energy)
+			body=''
 			bodyTemplate_energy = 'emeter_energy,eqid={eqid},tarif={tarif},direction={dir} value={value}\n'
-			body  = bodyTemplate_energy.format( eqid=meterID, 
-												dir='in',
-												tarif=1,
-												value=values['P1']['emeter_low_in'] )
-			body += bodyTemplate_energy.format( eqid=meterID,
-												dir='in',
-												tarif=2,
-												value=values['P1']['emeter_high_in'] )
-			body += bodyTemplate_energy.format( eqid=meterID,
-												dir='out',
-												tarif=1,
-												value=values['P1']['emeter_low_out'] )
-			body += bodyTemplate_energy.format( eqid=meterID,
-												dir='out',
-												tarif=2,
-												value=values['P1']['emeter_high_out'] )
+			
+			for i in [ 'emeter_low_in', 'emeter_high_in', 'emeter_low_out', 'emeter_high_out']:
+				splitted = i.split('_')
+				if 'in' in splitted:
+					direction='in'
+				elif 'out' in splitted:
+					direction='out'
 
+				if 'low' in splitted:
+					tarif = 1
+				elif 'high' in splitted:
+					tarif = 2
 
+				body += bodyTemplate_energy.format(eqid=meterID, 
+													dir=direction,
+													tarif=tarif,
+													value=values['P1'][i] )
 			'''
 			'1-0:1.7.0': 'emeter_pow_in', 				tariff= emeter_tariff_indicator, direction=in, phase=total , unit = kW (+P)
 			'1-0:2.7.0': 'emeter_pow_out',				tariff= emeter_tariff_indicator, direction=out, phase=total , unit = kW
@@ -232,47 +228,32 @@ def updateInflux(values):
 			'''
 			# meterstanden instant in kW (power)
 			bodyTemplate_power = 'emeter_power,eqid={eqid},tarif={tarif},direction={dir},phase={ph} value={value}\n'
-			body += bodyTemplate_power.format(	eqid=meterID,
-												ph='total',
-												dir='in',
-												tarif=int(values['P1']['emeter_tarif_indicator']),
-												value=values['P1']['emeter_pow_in'] )			
-			body += bodyTemplate_power.format(	eqid=meterID,
-												ph='total',
-												dir='out',
-												tarif=int(values['P1']['emeter_tarif_indicator']),
-												value=values['P1']['emeter_pow_out'] )
-			body += bodyTemplate_power.format(	eqid=meterID,
-												ph='L1',
-												dir='in',
-													tarif=int(values['P1']['emeter_tarif_indicator']),
-												value=values['P1']['emeter_in_one'] )
-			body += bodyTemplate_power.format(	eqid=meterID,
-												ph='L2',
-												dir='in',
-												tarif=int(values['P1']['emeter_tarif_indicator']),
-												value=values['P1']['emeter_in_two'] )
-			body += bodyTemplate_power.format(	eqid=meterID,
-												ph='L3',
-												dir='in',
-												tarif=int(values['P1']['emeter_tarif_indicator']),
-												value=values['P1']['emeter_in_three'] )
 
-			body += bodyTemplate_power.format(	eqid=meterID,
-												ph='L1',
-												dir='out',
-												tarif=int(values['P1']['emeter_tarif_indicator']),
-												value=values['P1']['emeter_out_one'] )
-			body += bodyTemplate_power.format(	eqid=meterID,
-												ph='L2',
-												dir='out',
-												tarif=int(values['P1']['emeter_tarif_indicator']),
-												value=values['P1']['emeter_out_two'] )
-			body += bodyTemplate_power.format(	eqid=meterID,
-												ph='L3',
-												dir='out',
-												tarif=int(values['P1']['emeter_tarif_indicator']),
-												value=values['P1']['emeter_out_three'] )
+			for i in [ 'emeter_pow_in', 'emeter_pow_out', 'emeter_in_one', 'emeter_in_two', 'emeter_in_three', 'emeter_out_one', 'emeter_out_two', 'emeter_out_three' ]:
+				splitted = i.split('_')
+
+				if 'in' in splitted:
+					direction='in'
+				elif 'out' in splitted:
+					direction='out' 
+
+				if 'pow' in splitted:
+					phase = 'total'
+				elif 'one' in splitted:
+					phase = 'L1'
+				elif 'two' in splitted:
+					phase = 'L2'
+				elif 'three' in splitted:
+					phase = 'L3'
+
+				body += bodyTemplate_power.format(	eqid=meterID,
+													ph=phase,
+													dir=direction,
+													tarif=int(values['P1']['emeter_tarif_indicator']),
+													value=values['P1'][i] )			
+
+
+
 			logging.debug('post body: \n{}'.format(body))
 			httpPost(body)
 
@@ -287,6 +268,7 @@ def updateInflux(values):
 			httpPost(body)
 
 		else:
+			logging.info("Ooops! missed soler value ")
 			pass  # pass if something other then P1
 	else:
 		pass # pass if meterId not set
