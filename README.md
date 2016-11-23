@@ -43,10 +43,11 @@ formatter=formatter
 args=(sys.stderr,)
 
 [handler_file_handler]
-class=RotatingFileHandler
+class=handlers.RotatingFileHandler
 level=DEBUG
 formatter=formatter
-args=('debug.log', maxBytes=200000, backupCount=5)
+args=('debug.log', 2000, 7)
+
 
 
 [formatter_formatter]
