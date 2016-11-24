@@ -3,7 +3,6 @@ import serial, sys, re
 import logging
 from logging.config import fileConfig
 
-
 from datetime import datetime
 from time import sleep
 from httplib import HTTPSConnection
@@ -26,7 +25,6 @@ logger = logging.getLogger()
 def minimalModbusLogger(message):
    logger.debug(message)
 
-
 minimalmodbus._print_out = minimalModbusLogger
 
 # init COM port
@@ -38,7 +36,6 @@ ser.open()
 
 global meterID
 meterID = None
-
 
 #init rs485 
 rs485 = minimalmodbus.Instrument( Config.get('rs485', 'Instrument'), 1)
@@ -63,17 +60,15 @@ rs485.serial.timeout = int(Config.get('rs485', 'timeout'))
 bodyTemplate_power = 'emeter_power,eqid={eqid},tarif={tarif},direction={dir},phase={ph} value={value}\n'
 
 body += bodyTemplate_power.format(	eqid=meterID,
-									tarif=int(values['P1']['emeter_tarif_indicator']),
-									dir=direction,
-									ph=phase,
-									value=values['P1'][i] )		
+					tarif=int(values['P1']['emeter_tarif_indicator']),
+					dir=direction,
+					ph=phase,
+					value=values['P1'][i] )		
 energy:
 direction tarif
 
 power:
 direction phase
-
-
 '''
 
 options = {
@@ -154,30 +149,32 @@ def postP1(values, stop_event):
 
 	if meterID and stop_event.is_set():
 			tarif = int(values['emeter_tarif_indicator'])
+                        etime = int(values['emeter_time']) * 1000000000
 
 			body=''
-			bodyTemplate_energy = 'emeter_energy,eqid={eqid},tarif={tarif},direction={dir} value={value} \n'
-			bodyTemplate_power = 'emeter_power,eqid={eqid},tarif={tarif},direction={dir},phase={phase} value={value}\n'
+			bodyTemplate_energy = 'emeter_energy,eqid={eqid},tarif={tarif},direction={dir} value={value} {etime}\n'
+			bodyTemplate_power = 'emeter_power,eqid={eqid},tarif={tarif},direction={dir},phase={phase} value={value} {etime}\n'
 
 			for k,v in options.items():
 				splitted = v.split('_')
 				if splitted[0] == 'power':
 					# meterstanden acuteel in kW )(power)
 					body += bodyTemplate_power.format(	eqid=meterID,
-														tarif=tarif,
-														dir=splitted[1],
-														phase=splitted[2],
-														value=values[v] )
+										tarif=tarif,
+										dir=splitted[1],
+										phase=splitted[2],
+										value=values[v],
+                                                                                etime=etime )
 				elif splitted[0] == 'energy':
 					#meterstanden  cummulitieven in kWh (energy)
-					body += bodyTemplate_energy.format(eqid=meterID, 
-															dir=splitted[1],
-															tarif=splitted[2],
-															value=values[v] )
+					body += bodyTemplate_energy.format(	eqid=meterID, 
+										dir=splitted[1],
+										tarif=splitted[2],
+										value=values[v],
+                                                                                etime=etime )
 			logging.debug('post body: \n{}'.format(body))
 			httpPost(body)
 			sleep(10)
-
 
 def readRS485(stop_event ):
 	''' read DSM120 powermeter over rs485 '''
@@ -224,7 +221,7 @@ def httpPost(body):
 
 	conn.set_debuglevel(7)
 	try:
-		dbname='db_name'
+		#dbname='db_name'
 		conn.request('POST', '/write?db={db}&u={user}&p={password}'.format(db=dbname, user=username, password=wachtwoord), body, headers) 
 	except Exception as e:
 		logging.info('Ooops! something went wronh with POSTing {}'.format(e))
@@ -234,13 +231,8 @@ def httpPost(body):
 		logging.info('Updated Influx. HTTP response {}'.format(response.status))
 	finally:
 		conn.close()
-
-
 		#logging.debug("Reason: {}\n Response:{}".format(response.reason, response.read) )
 	conn.close()
-
-
-
 		
 def ConfigSectionMap(section):
 	dict1 = {}
@@ -258,16 +250,14 @@ def ConfigSectionMap(section):
 def tijdomvormer(timestamp):
 	year	= '20' + timestamp[0:2]
 	month	= timestamp[2:4]
-	day		= timestamp[4:6]
+	day	= timestamp[4:6]
 	hour	= timestamp[6:8] 
 	minutes	= timestamp[8:10]
 	seconds	= timestamp[10:12] 
 	return datetime(*map(int,( year, month, day, hour, minutes, seconds ) )).strftime('%s')  # epoch				
 
-
 def main():
 	logger.info("Starting main thread")
-
 
 	pill2kill = Event()
 	pill2kill.set()
@@ -289,9 +279,3 @@ def main():
 	
 if __name__ == '__main__': 
 	main()
-
-
-
-
-
-
