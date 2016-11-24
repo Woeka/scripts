@@ -126,23 +126,23 @@ def readP1(stop_event ):
 
 def postP1(values, stop_event):
 	'''
-	'0-0:96.1.1': 'emeter_id',  	  			eqid
-	'1-0:1.8.1': 'energy_in_1' , 	  			tariff=1, direction=in, unit = kWh
+	'0-0:96.1.1': 'emeter_id',  	  		eqid
+	'1-0:1.8.1': 'energy_in_1' , 	  		tariff=1, direction=in, unit = kWh
 	'1-0:1.8.2': 'energy_in_2' ,   			tariff=2, direction=in, unit = kWh
 	'1-0:2.8.1': 'energy_out_1' ,  			tariff=1, direction=out, unit = kWh
 	'1-0:2.8.2': 'energy_out_2', 			tariff=2, direction=out, unit = kWh
 
-	'0-0:1.0.0': 'emeter_time',					meter time
-	'0-0:96.14.0': 'emeter_tariff_indicator',   tariff	
+	'0-0:1.0.0': 'emeter_time',			meter time
+	'0-0:96.14.0': 'emeter_tariff_indicator',	tariff	
 
-	'1-0:1.7.0': 'power_in_total', 				tariff= emeter_tariff_indicator, direction=in, phase=total , unit = kW (+P)
-	'1-0:2.7.0': 'power_out_total',				tariff= emeter_tariff_indicator, direction=out, phase=total , unit = kW
+	'1-0:1.7.0': 'power_in_total', 			tariff= emeter_tariff_indicator, direction=in, phase=total , unit = kW (+P)
+	'1-0:2.7.0': 'power_out_total',			tariff= emeter_tariff_indicator, direction=out, phase=total , unit = kW
 
-	'1-0:21.7.0': 'power_in_L1',				tariff= emeter_tariff_indicator, direction=in, phase=one, unit = kW
-	'1-0:41.7.0': 'power_in_L2',				tariff= emeter_tariff_indicator, direction=in, phase=two, unit = kW
+	'1-0:21.7.0': 'power_in_L1',			tariff= emeter_tariff_indicator, direction=in, phase=one, unit = kW
+	'1-0:41.7.0': 'power_in_L2',			tariff= emeter_tariff_indicator, direction=in, phase=two, unit = kW
 	'1-0:61.7.0': 'power_in_L3',			tariff= emeter_tariff_indicator, direction=in, phase=three , unit = kW
-	'1-0:22.7.0': 'power_out_L1',				tariff= emeter_tariff_indicator, direction=out, phase=one, unit = kW
-	'1-0:42.7.0': 'power_out_L2',				tariff= emeter_tariff_indicator, direction=out, phase=two, unit = kW
+	'1-0:22.7.0': 'power_out_L1',			tariff= emeter_tariff_indicator, direction=out, phase=one, unit = kW
+	'1-0:42.7.0': 'power_out_L2',			tariff= emeter_tariff_indicator, direction=out, phase=two, unit = kW
 	'1-0:62.7.0': 'power_out_L3',			tariff= emeter_tariff_indicator, direction=out, phase=three, unit = kW
 
 	'''
