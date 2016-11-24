@@ -1,0 +1,87 @@
+#!/usr/bin/env python
+
+# derived from https://github.com/jvhaarst/DSMR-P1-telegram-reader/blob/master/telegram_from_serial.py
+
+import serial, sys, re
+import logging
+from logging.config import fileConfig
+
+from datetime import datetime
+from time import sleep
+from httplib import HTTPSConnection
+from threading import Thread, Event, currentThread
+import ssl  #inlfux
+import minimalmodbus #rs485
+
+import ConfigParser
+
+import crcmod
+
+#read config
+Config = ConfigParser.ConfigParser()
+Config.readfp(open('/home/pi/scripts/aardehuis_nl_config.ini'))
+Config.read('/home/pi/scripts/aardehuis_nl_config.ini')
+
+# logging
+fileConfig('/home/pi/scripts/aardehuis_nl_config.ini', )
+logger = logging.getLogger()
+
+#set minimalmodbus logging
+def minimalModbusLogger(message):
+   logger.debug(message)
+
+minimalmodbus._print_out = minimalModbusLogger
+
+# init COM port
+ser          = serial.Serial()
+ser.baudrate = Config.get('serial', 'baudrate')
+ser.timeout  = int(Config.get('serial', 'timeout'))
+ser.port     = Config.get('serial', 'port')
+ser.open()
+
+
+# Program variables
+# The true telegram ends with an exclamation mark after a CR/LF
+pattern = re.compile(b'\r\n(?=!)')
+# According to the DSMR spec, we need to check a CRC16
+crc16 = crcmod.predefined.mkPredefinedCrcFun('crc16')
+
+while True:
+        telegram = ''
+        checksum_found = False
+
+        while not checksum_found:
+                # Read in a line
+                telegram_line = ser.readline()
+
+                # Check if it matches the start line (/ at start)
+                if re.match(b'(?=/)', telegram_line):
+                        telegram = telegram + telegram_line
+                        print('Found start!')
+                        while not checksum_found:
+                                telegram_line = ser.readline()
+                                # Check if it matches the checksum line (! at start)
+                                if re.match(b'(?=!)', telegram_line):
+                                        telegram = telegram + telegram_line
+                                        print('Found checksum!')
+                                        checksum_found = True
+                                else:
+                                        telegram = telegram + telegram_line
+
+        # print telegram
+
+        # We have a complete telegram, now we can process it.
+        # Look for the checksum in the telegram
+        good_checksum =  False
+        for m in pattern.finditer(telegram):
+                # Remove the exclamation mark from the checksum,
+                # and make an integer out of it.
+                given_checksum = int('0x' + telegram[m.end() + 1:].decode('ascii'), 16)
+                # The exclamation mark is also part of the text to be CRC16'd
+                calculated_checksum = crc16(telegram[:m.end() + 1])
+                if given_checksum == calculated_checksum:
+                        good_checksum = True
+                if good_checksum:
+                        print("Good checksum!")
+                else:
+                        print("No Good, next!")
