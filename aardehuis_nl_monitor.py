@@ -12,13 +12,19 @@ import minimalmodbus #rs485
 
 import ConfigParser
 
+import crcmod
+
+import urllib
+import urllib2
+import base64
+
 #read config
 Config = ConfigParser.ConfigParser()
-Config.readfp(open('/home/leen/scripts/aardehuis_nl_config.ini'))
-Config.read('/home/leen/scripts/aardehuis_nl_config.ini')
+Config.readfp(open('/home/pi/scripts/aardehuis_nl_config.ini'))
+Config.read('/home/pi/scripts/aardehuis_nl_config.ini')
 
 # logging
-fileConfig('/home/leen/scripts/aardehuis_nl_config.ini', )
+fileConfig('/home/pi/scripts/aardehuis_nl_config.ini', )
 logger = logging.getLogger()
 
 #set minimalmodbus logging
@@ -47,6 +53,14 @@ rs485.serial.bytesize = int(Config.get('rs485', 'bytesize'))
 rs485.serial.stopbits = int(Config.get('rs485', 'stopbits'))
 rs485.serial.timeout = int(Config.get('rs485', 'timeout')) 
 
+
+# Program variables
+# The true telegram ends with an exclamation mark after a CR/LF
+pattern = re.compile(b'\r\n(?=!)')
+# According to the DSMR spec, we need to check a CRC16
+crc16 = crcmod.predefined.mkPredefinedCrcFun('crc16')
+
+
 '''
 	emeter_energy
 		tagKey:
@@ -56,17 +70,14 @@ rs485.serial.timeout = int(Config.get('rs485', 'timeout'))
 			direction [in, out]
 		values:
 			energy [float/int]
-
 bodyTemplate_power = 'emeter_power,eqid={eqid},tarif={tarif},direction={dir},phase={ph} value={value}\n'
-
 body += bodyTemplate_power.format(	eqid=meterID,
-					tarif=int(values['P1']['emeter_tarif_indicator']),
-					dir=direction,
-					ph=phase,
-					value=values['P1'][i] )		
+									tarif=int(values['P1']['emeter_tarif_indicator']),
+									dir=direction,
+									ph=phase,
+									value=values['P1'][i] )		
 energy:
 direction tarif
-
 power:
 direction phase
 '''
@@ -101,55 +112,100 @@ def readP1(stop_event ):
 		logger.info("reading P1")
 		tagStack = options.keys()
 		ret = {}
-		while tagStack:
-			raw = ser.readline()
-			logging.debug('raw telegram: {}'.format(raw))
-			tag = raw.split('(')[0]
 
-			if tag in options.keys():
-				value = re.sub(regex, '', raw.split('(')[1])
-				logger.debug("found tag: {} value: {}".format(tag,value) )
+		telegram = ''
+		checksum_found = False
 
-				if tag == '0-0:96.1.1':
-					ret[options[tag]] = str(value).decode('hex')
-					# set globel meterID
-					global meterID
-					meterID = ret[options[tag]]
-				elif tag == '0-0:1.0.0':
-					ret[options[tag]] = tijdomvormer(value)
-				else:
-					ret[options[tag]] = value 
+		while not checksum_found:
+			# Read in a line
+			telegram_line = ser.readline()
 
-				tagStack.remove(tag)
-		logger.debug('P1 return value: {}'.format(ret))
-		postP1( ret, stop_event )
+			# Check if it matches the start line (/ at start)
+			if re.match(b'(?=/)', telegram_line):
+				telegram = telegram + telegram_line
+				logger.debug('Found start!')
+				while not checksum_found:
+					telegram_line = ser.readline()
+					# Check if it matches the checksum line (! at start)
+					if re.match(b'(?=!)', telegram_line):
+						telegram = telegram + telegram_line
+						logger.debug('Found checksum!')
+						checksum_found = True
+					else:
+						telegram = telegram + telegram_line
+
+		# print telegram
+
+		# We have a complete telegram, now we can process it.
+		# Look for the checksum in the telegram
+		good_checksum =  False
+		for m in pattern.finditer(telegram):
+			# Remove the exclamation mark from the checksum,
+			# and make an integer out of it.
+			given_checksum = int('0x' + telegram[m.end() + 1:].decode('ascii'), 16)
+			# The exclamation mark is also part of the text to be CRC16'd
+			calculated_checksum = crc16(telegram[:m.end() + 1])
+			if given_checksum == calculated_checksum:
+				good_checksum = True
+			
+			if good_checksum:
+				logger.info("Good checksum!")
+	
+				try: 
+					while tagStack:
+					
+						for raw in telegram.split(b'\r\n'):
+
+							#logging.debug('raw telegram: {}'.format(raw))
+							tag = raw.split('(')[0]
+				
+							if tag in options.keys():
+								value = re.sub(regex, '', raw.split('(')[1])
+								logger.debug("found tag: {} value: {}".format(tag,value) )
+				
+								if tag == '0-0:96.1.1':
+									ret[options[tag]] = str(value).decode('hex')
+									# set globel meterID
+									global meterID
+									meterID = ret[options[tag]]
+								elif tag == '0-0:1.0.0':
+									ret[options[tag]] = tijdomvormer(value)
+								else:
+									ret[options[tag]] = value 
+
+								tagStack.remove(tag)
+					
+					logger.debug('P1 return value: {}'.format(ret))
+					postP1( ret, stop_event )
+				except:
+					logger.debug('P1 read error')
+
+			else:
+				logger.info("No Good, next!")
 
 def postP1(values, stop_event):
 	'''
 	'0-0:96.1.1': 'emeter_id',  	  		eqid
-	'1-0:1.8.1': 'energy_in_1' , 	  		tariff=1, direction=in, unit = kWh
-	'1-0:1.8.2': 'energy_in_2' ,   			tariff=2, direction=in, unit = kWh
-	'1-0:2.8.1': 'energy_out_1' ,  			tariff=1, direction=out, unit = kWh
+	'1-0:1.8.1': 'energy_in_1', 	  		tariff=1, direction=in, unit = kWh
+	'1-0:1.8.2': 'energy_in_2',   			tariff=2, direction=in, unit = kWh
+	'1-0:2.8.1': 'energy_out_1',  			tariff=1, direction=out, unit = kWh
 	'1-0:2.8.2': 'energy_out_2', 			tariff=2, direction=out, unit = kWh
-
-	'0-0:1.0.0': 'emeter_time',			meter time
+	'0-0:1.0.0': 'emeter_time',				meter time
 	'0-0:96.14.0': 'emeter_tariff_indicator',	tariff	
-
-	'1-0:1.7.0': 'power_in_total', 			tariff= emeter_tariff_indicator, direction=in, phase=total , unit = kW (+P)
+	'1-0:1.7.0': 'power_in_total',			tariff= emeter_tariff_indicator, direction=in, phase=total , unit = kW (+P)
 	'1-0:2.7.0': 'power_out_total',			tariff= emeter_tariff_indicator, direction=out, phase=total , unit = kW
-
 	'1-0:21.7.0': 'power_in_L1',			tariff= emeter_tariff_indicator, direction=in, phase=one, unit = kW
 	'1-0:41.7.0': 'power_in_L2',			tariff= emeter_tariff_indicator, direction=in, phase=two, unit = kW
 	'1-0:61.7.0': 'power_in_L3',			tariff= emeter_tariff_indicator, direction=in, phase=three , unit = kW
 	'1-0:22.7.0': 'power_out_L1',			tariff= emeter_tariff_indicator, direction=out, phase=one, unit = kW
 	'1-0:42.7.0': 'power_out_L2',			tariff= emeter_tariff_indicator, direction=out, phase=two, unit = kW
 	'1-0:62.7.0': 'power_out_L3',			tariff= emeter_tariff_indicator, direction=out, phase=three, unit = kW
-
 	'''
 
 	if meterID and stop_event.is_set():
+
 			tarif = int(values['emeter_tarif_indicator'])
-                        etime = int(values['emeter_time']) * 1000000000
+			etime = int(values['emeter_time']) * 1000000000
 
 			body=''
 			bodyTemplate_energy = 'emeter_energy,eqid={eqid},tarif={tarif},direction={dir} value={value} {etime}\n'
@@ -164,16 +220,42 @@ def postP1(values, stop_event):
 										dir=splitted[1],
 										phase=splitted[2],
 										value=values[v],
-                                                                                etime=etime )
+										etime=etime )
+					# meterstanden acuteel in kW )(power)
+					if splitted[2] == 'total':
+						if splitted[1] == 'in':
+							cons = int(float(values[v])*1000)
+							#print float(values[v])*1000
+						else:
+							prod = int(float(values[v])*1000)
+							#print float(values[v])*1000
 				elif splitted[0] == 'energy':
 					#meterstanden  cummulitieven in kWh (energy)
 					body += bodyTemplate_energy.format(	eqid=meterID, 
 										dir=splitted[1],
 										tarif=splitted[2],
 										value=values[v],
-                                                                                etime=etime )
+										etime=etime )
+					#print splitted[1], splitted[2], float(values[v])*1000
+					#meterstanden  cummulitieven in kWh (energy)
+					if splitted[1] == 'in':
+						if splitted[2] == '1':
+							usage1 = int(float(values[v])*1000)
+						else:
+							usage2 = int(float(values[v])*1000)
+					else:
+						if splitted[2] == '1':
+							return1 = int(float(values[v])*1000)
+						else:
+							return2 = int(float(values[v])*1000)
+
+			#Domoticz
+			IDX = 11
+			svalue = str(usage1)+';'+str(usage2)+';'+str(return1)+';'+str(return2)+';'+str(cons)+';'+str(prod)
+	
 			logging.debug('post body: \n{}'.format(body))
-			httpPost(body)
+			InfluxPost(body)
+			DomoticzPost( svalue, IDX )
 			sleep(10)
 
 def readRS485(stop_event ):
@@ -191,8 +273,13 @@ def readRS485(stop_event ):
 		else:
 			ret['sol_pow'] = float(Activepower)
 			ret['sol_nrg'] = float(TotalPower)
+
+			svalue = str(int(float(Activepower)*-1)) +';'+ str(int(float(TotalPower))*1000)
+			IDX = 13
+
 			logger.debug('rs485 return value: {}'.format(ret))
 			postRS485( ret, stop_event ) 
+			DomoticzPost( svalue, IDX )
 		sleep(9)
 
 def postRS485(values, stop_event):
@@ -204,9 +291,9 @@ def postRS485(values, stop_event):
 		body += bodyTemplate_solar.format(eqid=meterID,type='instant', value=values['sol_pow'])
 
 		logging.debug('post body: \n{}'.format(body))
-		httpPost(body)
+		InfluxPost(body)
 
-def httpPost(body):
+def InfluxPost(body):
 	host 		= Config.get('influxdb', 'influxHost')
 	port 		= Config.get('influxdb', 'port')
 	wachtwoord 	= Config.get('influxdb', 'wachtwoord')
@@ -224,15 +311,50 @@ def httpPost(body):
 		#dbname='db_name'
 		conn.request('POST', '/write?db={db}&u={user}&p={password}'.format(db=dbname, user=username, password=wachtwoord), body, headers) 
 	except Exception as e:
-		logging.info('Ooops! something went wronh with POSTing {}'.format(e))
+		logging.info('Ooops! something went wrong with POSTing {}'.format(e))
 		pass
 	else:
 		response = conn.getresponse()
 		logging.info('Updated Influx. HTTP response {}'.format(response.status))
 	finally:
 		conn.close()
-		#logging.debug("Reason: {}\n Response:{}".format(response.reason, response.read) )
+
+		logging.debug("Reason: {}\n Response:{}".format(response.reason, response.read) )
 	conn.close()
+
+def DomoticzPost(svalue, IDX):
+	domoticz_host 	= Config.get('domoticz', 'domoticzHost')
+	domoticz_port 	= Config.get('domoticz', 'port')
+	domoticz_url	= Config.get('domoticz', 'url')
+	wachtwoord 	= Config.get('domoticz', 'wachtwoord')
+	username	= Config.get('domoticz', 'username')
+
+	url = ("http://" + domoticz_host + ":" + domoticz_port + "/" + domoticz_url)
+
+	get_data = {
+		'svalue': svalue,
+		'type': 'command',
+		'param': 'udevice',
+		'idx' : str(IDX),
+		'nvalue': '0',
+	}
+
+	get_data_encoded = urllib.urlencode(get_data)
+	request_object = urllib2.Request(url + '?' + get_data_encoded)
+	base64string = base64.b64encode('%s:%s' % (username, wachtwoord))
+	request_object.add_header("Authorization", "Basic %s" % base64string)   
+	try:
+		response = urllib2.urlopen(request_object)
+	except urllib2.URLError as e:
+		if hasattr(e, 'reason'):
+			print 'Failed to reach a server.'
+			print 'Reason: ', e.reason
+		elif hasattr(e, 'code'):
+			print 'The server couldn\'t fulfill the request.'
+			print 'Error code: ', e.code
+	else:
+		#everything is fine
+		logging.info('Updated Domoticz. HTTP response {}'.format(response.read()))
 		
 def ConfigSectionMap(section):
 	dict1 = {}
@@ -250,7 +372,7 @@ def ConfigSectionMap(section):
 def tijdomvormer(timestamp):
 	year	= '20' + timestamp[0:2]
 	month	= timestamp[2:4]
-	day	= timestamp[4:6]
+	day		= timestamp[4:6]
 	hour	= timestamp[6:8] 
 	minutes	= timestamp[8:10]
 	seconds	= timestamp[10:12] 
